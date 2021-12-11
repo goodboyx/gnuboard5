@@ -47,12 +47,6 @@ function sms5_sub_paging($write_pages, $cur_page, $total_page, $url, $add="", $s
         return "";
 }
 
-// php8 버전 호환 권한 검사 함수
-function ajax_auth_check_menu($auth, $sub_menu, $attr){
-    $check_auth = isset($auth[$sub_menu]) ? $auth[$sub_menu] : '';
-    return ajax_auth_check($check_auth, $attr);
-}
-
 // 권한 검사
 function ajax_auth_check($auth, $attr)
 {
@@ -98,7 +92,7 @@ if ( ! function_exists('get_hp')) {
         $hp = str_replace('-', '', trim($hp));
         $hp = preg_replace("/^(01[016789])([0-9]{3,4})([0-9]{4})$/", $preg, $hp);
 
-        if (isset($g5['sms5_demo']) && $g5['sms5_demo'])
+        if ($g5['sms5_demo'])
             $hp = '0100000000';
 
         return $hp;
@@ -156,46 +150,136 @@ if($config['cf_sms_type'] == 'LMS') {
         var $socket_host;
         var $socket_port;
         var $socket_portcode;
+        var $socket_path;
         var $send_type;
         var $Data = array();
         var $Result = array();
         var $Log = array();
 
-        function Add($strDest, $strCallBack, $strCaller, $strSubject, $strURL, $strData, $strDate="", $nCount) {
-            global $config;
+        // SMS 서버 접속
+        function SMS_con($sms_server,$sms_id,$sms_pw,$port) {
+            $url = SUPPORT.'/www/sms/send.php';
+            $tmp = parse_url($url);
+            $this->socket_host      = $tmp['host'];
+            $this->socket_port      = empty($tmp['port']) ? '80' : $tmp['port'];
+            $this->socket_path      = $tmp['path'];
+            $this->icode_id         = FillSpace($sms_id, 20);
+            $this->icode_pw         = FillSpace($sms_pw, 20);
+        }
 
-            // 아이코드 JSON 모듈은 UTF-8 을 사용하며, sms 또는 lms 는 euc-kr 로 사용한다.
-            if(! (isset($config['cf_icode_token_key']) && $config['cf_icode_token_key'])){
-                // EUC-KR로 변환
-                $strCaller  = iconv_euckr($strCaller);
-                $strSubject = iconv_euckr($strSubject);
-                $strData    = iconv_euckr($strData);
+        function Init() {
+            $this->Data     = "";   // 발송하기 위한 패킷내용이 배열로 들어간다.
+            $this->Result   = "";   // 발송결과값이 배열로 들어간다.
+        }
+
+        function Add($strDest, $strCallBack, $strCaller, $strSubject, $strURL, $strData, $strDate="", $nCount) {
+            $strSearch  = array("&","+","?","#");
+            $strReplace = array("＆","＋","？","＃");
+            $strCaller = stripslashes(preg_replace("/[\r\n\t\s]+/", " ", $strCaller));
+            $strCaller = str_replace($strSearch, $strReplace, $strCaller);
+            $strSubject = stripslashes(preg_replace("/[\r\n\t\s]+/", " ", $strSubject));
+            $strSubject = str_replace($strSearch, $strReplace, $strSubject);
+            $strCaller = $strSubject = ''; // 한글이 잘못 짤릴 수 있으므로 사용안하는 항목 비움 2017-08-09
+            $strData = stripslashes($strData);
+            $strData = str_replace($strSearch, $strReplace, $strData);
+
+            // 문자 타입별 Port 설정.
+            if (trim($strURL)) {
+                $sendType = 1;
+                $sendPort = '05173';
+            } else if (strlen(iconv('UTF-8','CP949', stripslashes(conv_unescape_nl($strData)))) > 90) {
+                $sendType = 1;
+                $sendPort = '02255';
+            } else {
+                $sendType = 0;
+                $sendPort = '01144';
             }
 
-            return parent::Add($strDest, $strCallBack, $strCaller, $strSubject, $strURL, $strData, $strDate, $nCount);
+            $strCallBack    = FillSpace($strCallBack, 11);       // 회신번호
+            $strDate        = FillSpace($strDate, 12);           // 즉시(12byte 공백), 예약전송(YmdHi)
+
+            $strCaller      = FillSpace($strCaller,10);
+            $strSubject     = FillSpace($strSubject,30);
+            $strURL         = FillSpace($strURL,100);
+
+            if ($sendPort == '05173') {
+                //$strData    = FillSpace(CutChar($strData,1500),1500);
+            } else if ($sendPort == '02255') {
+                //$strData    = FillSpace(CutChar($strData,1500),1500);
+            } else {
+                //$strData    = FillSpace(CutChar($strData,90),90);
+            }
+
+            $Error = CheckCommonTypeDest($strDest, $nCount);
+            $Error = is_vaild_callback($strCallBack);
+            $Error = CheckCommonTypeDate($strDate);
+
+            for ($i=0; $i<$nCount; $i++) {
+                $strDest[$i] = FillSpace($strDest[$i],11);
+                $this->Data[$i] = $sendPort.' '.$this->icode_id.$this->icode_pw.$strDest[$i].$strCallBack.$strDate.$strCaller.$strSubject.$strURL.$strData;
+            }
+            return true;
         }
+
 
         function Send() {
             global $g5;
 
-            if (isset($g5['sms5_demo_send']) && $g5['sms5_demo_send']) {
+            if ($g5['sms5_demo_send']) {
                 foreach($this->Data as $puts) {
                     if (rand(0,10)) {
-                        $phone = substr($puts,26,11);
+                        $phone = substr($puts,46,11);
                         $code = '47022497 ';
                     } else {
-                        $phone = substr($puts,26,11);
+                        $phone = substr($puts,46,11);
                         $code = 'Error(02)';
                     }
                     $this->Result[] = "$phone:$code";
                     $this->Log[] = $puts;
                 }
-                $this->Data = array();
+                $this->Data = "";
                 return true;
                 exit;
             }
 
-            return parent::Send();
+            $fsocket = fsockopen($this->socket_host,$this->socket_port, $errno, $errstr, 2);
+            if (!$fsocket) return false;
+            set_time_limit(300);
+
+            foreach($this->Data as $puts) {
+                // fputs($fsocket, $puts);
+                // while(!$gets) { $gets = fgets($fsocket,30); }
+
+                $header = "";
+                $header .= "POST ".$this->socket_path." HTTP/1.1\r\n";
+                $header .= "Host: ".$this->socket_host."\r\n";
+                $header .= "Content-type: application/x-www-form-urlencoded\r\n";
+                $header .= "Content-length: " . strlen('data='.$puts) . "\r\n";
+                $header .= "Connection:close" . "\r\n\r\n";
+                fputs($fsocket, $header.'data='.$puts);
+
+                $dest = substr($puts,46,11);
+
+                $response = '';
+                while (!feof($fsocket)) {
+                    $response .= fgets($fsocket, 2048);
+                }
+                list($header, $body) = explode("\r\n\r\n", $response, 2);
+                $gets = trim($body);
+
+                if (substr($gets,0,19) == "0223  00".$dest) {
+                    $this->Result[] = $dest.":".substr($gets,19,10);
+                    $this->Log[] = $puts;
+                } else {
+                    $this->Result[$dest] = $dest.":Error(".substr($gets,6,2).")";
+                    $this->Log[] = $puts;
+                }
+                $gets = "";
+            }
+
+            fclose($fsocket);
+            $this->Data = "";
+            return true;
         }
     }
 } else {
@@ -203,6 +287,21 @@ if($config['cf_sms_type'] == 'LMS') {
 
     class SMS5 extends SMS {
         var $Log = array();
+
+        function SMS_con($sms_id,$sms_pw) {
+            $url = SUPPORT.'/www/sms/send.php';
+            $tmp = parse_url($url);
+
+            $this->ID=$sms_id;      // 계약 후 지정
+            $this->PWD=$sms_pw;     // 계약 후 지정
+            //$this->SMS_Server=$sms_server;
+            //$this->SMS_Port=$port;
+            $this->SMS_Server = $tmp['host'];
+            $this->SMS_Port = empty($tmp['port']) ? '80' : $tmp['port'];
+            $this->SMS_Path = $tmp['path'];
+            $this->ID = spacing($this->ID,20);
+            $this->PWD = spacing($this->PWD,20);
+        }
 
          /**
          * 발송번호의 값이 정확한 값인지 확인합니다.
@@ -280,8 +379,9 @@ if($config['cf_sms_type'] == 'LMS') {
                     break;
             }
         }
+
         function Add2($strDest, $strCallBack, $strCaller, $strURL, $strMessage, $strDate="", $nCount) {
-            global $g5, $config;
+            global $g5;
 
             $Error = $this->CheckCommonTypeDest($strDest, $nCount);
             $Error = $this->CheckCommonTypeCallBack($strCallBack);
@@ -291,91 +391,56 @@ if($config['cf_sms_type'] == 'LMS') {
             $strCaller      = spacing($strCaller,10);
             $strDate        = spacing($strDate,12);
 
-            // 토큰키를 사용한다면
-            if( isset($config['cf_icode_token_key']) && $config['cf_icode_token_key'] === $this->icode_key ){
 
-                for ($i=0; $i<$nCount; $i++) {
-                    $hp_number  = spacing($strDest[$i]['bk_hp'],11);
-                    $strData = $strMessage;
-                    if( !empty($strDest[$i]['bk_name']) ){
-                        $strData    = str_replace("{이름}", $strDest[$i]['bk_name'], $strData);
-                    }
-                    
-                    $msg = $strData;
-
-                    // 개행치환
-                    $msg = preg_replace("/\r\n/", "\n", $msg);
-                    $msg = preg_replace("/\r/", "\n", $msg);
-                    // 90byte 이내는 SMS, 90 ~ 2000 byte 는 LMS 그 이상은 절삭 되어 LMS로 발송
-                    // SMS 이기 때문에 90byte 이내로 합니다.
-                    $msg=cut_char($msg, 90);
-                    $msg = spacing($msg, 90);
-
-                    // 한글 깨진것이 있는지 체크합니다.
-                    if( preg_match('/^([\x00-\x7e]|.{2})*/', $msg, $z) ){
-                        $msg = $z[0];
-                    }
-
-                    // 문자 내용이 euc-kr 인지 체크합니다.
-                    $enc = mb_detect_encoding($msg, array('EUC-KR', 'UTF-8'));
-
-                    // 문자 내용이 euc-kr 이면 json_encode 에서 깨지기 때문에  utf-8 로 변환합니다.
-                    if($enc === 'EUC-KR'){
-                        $msg = iconv_utf8($msg);
-                    }
-
-                    // 보낼 내용을 배열에 집어넣기
-                    $dest = $hp_number;
-                    $callBack = $strCallBack;
-                    $Caller = $strCaller;
-                    $rsvTime = $strDate ? $strDate : '';
-
-                    $list = array(
-                        "key" => $this->icode_key, 
-                        "tel" => $dest,
-                        "cb" => $callBack,
-                        "msg" => $msg,
-                        "title" => "",      //SMS 의 경우 타이틀을 지정할수 없습니다.
-                        "date" => $rsvTime
-                    );
-
-                    $packet = json_encode($list);
-
-                    if( !$packet ){ // json_encode가 잘못되었으면 보내지 않습니다.
-                        return "json_encode error";
-                    }
-                    $this->Data[$i]    = '06'.str_pad(strlen($packet), 4, "0", STR_PAD_LEFT).$packet;
+            for ($i=0; $i<$nCount; $i++) {
+                $hp_number  = spacing($strDest[$i]['bk_hp'],11);
+                $strData = $strMessage;
+                if( !empty($strDest[$i]['bk_name']) ){
+                    $strData    = str_replace("{이름}", $strDest[$i]['bk_name'], $strData);
                 }
+                // 아이코드에서는 문자에 utf-8 인코딩 형식을 아직 지원하지 않는다.
+                //$strData = iconv('utf-8', "euc-kr", stripslashes($strData));
+                $strData = stripslashes($strData);
+                $strData    = spacing(cut_char($strData,80),80);
 
-            } else {
-
-                for ($i=0; $i<$nCount; $i++) {
-                    $hp_number  = spacing($strDest[$i]['bk_hp'],11);
-                    $strData = $strMessage;
-                    if( !empty($strDest[$i]['bk_name']) ){
-                        $strData    = str_replace("{이름}", $strDest[$i]['bk_name'], $strData);
-                    }
-                    // 아이코드에서는 문자에 utf-8 인코딩 형식을 아직 지원하지 않는다.
-                    $strData = iconv('utf-8', "euc-kr", stripslashes($strData));
-
-                    if (!$strURL) {
-                        $strData    = spacing(cut_char($strData,80),80);
-
-                        $this->Data[$i] = '01144 '.$this->ID.$this->PWD.$hp_number.$strCallBack.$strCaller.$strDate.$strData;
-                    } else {
-                        $strURL     = spacing($strURL,50);
-                        $strData    = spacing($this->CheckCallCenter($strURL, $hp_number, $strData),80);
-
-                        $this->Data[$i] = '05173 '.$this->ID.$this->PWD.$hp_number.$strCallBack.$strURL.$strDate.$strData;
-                    }
+                $service = '      ';
+                if (!$strURL) {
+                    $service = '01144 ';
+                } else {
+                    $service = '05173 ';
                 }
+                $this->Data[$i] = $service.$this->ID.$this->PWD.$hp_number.$strCallBack.$strDate.$strData;
+
+                /*
+                if (!$strURL) {
+                    $strData    = spacing(cut_char($strData,80),80);
+
+                    $this->Data[$i] = '01144 '.$this->ID.$this->PWD.$hp_number.$strCallBack.$strCaller.$strDate.$strData;
+                } else {
+                    $strURL     = spacing($strURL,50);
+                    $strData    = spacing($this->CheckCallCenter($strURL, $hp_number, $strData),80);
+
+                    $this->Data[$i] = '05173 '.$this->ID.$this->PWD.$hp_number.$strCallBack.$strURL.$strDate.$strData;
+                } */
             }
+
+            /*
+            print_r($this->Data);
+            $str = '01144 test****************1234****************0111234567*01012345678201704301656감사합니다 ㅠ ㅠ*********************************************************';
+            echo strlen($str).'<br/>'; // 총 170자
+            echo '서비스:  '.substr($str, 0, 5).'<br/>';
+            echo '아이디:  '.substr($str, 6, 20).'<br/>';
+            echo '비밀번호: '.substr($str, 26, 20).'<br/>';
+            echo '받는사람: '.substr($str, 46, 11).'<br/>';
+            echo '회신번호: '.substr($str, 57, 11).'<br/>';
+            echo '예약시간: '.substr($str, 68, 12).'<br/>';
+            echo '내용:     '.substr($str, 80, 80).'<br/>'; */
 
             return true; // 수정대기
         }
 
         function Send() {
-            global $g5, $config;
+            global $g5;
 
             $count = 1;
 
@@ -391,67 +456,61 @@ if($config['cf_sms_type'] == 'LMS') {
                     $this->Result[] = "$phone:$code";
                     $this->Log[] = $puts;
                 }
-                $this->Data = array();
+                $this->Data = "";
                 return true;
                 exit;
             }
 
-            // 토큰키를 사용한다면
-            if( isset($config['cf_icode_token_key']) && $config['cf_icode_token_key'] === $this->icode_key ){
-                $fsocket = fsockopen(trim($this->socket_host),trim($this->socket_port), $errno, $errstr, 2);
-                if (!$fsocket) return false;
-                set_time_limit(300);
+            // $fsocket=fsockopen($this->SMS_Server,$this->SMS_Port);
+            // if (!$fsocket) return false;
+            // set_time_limit(300);
 
-                foreach($this->Data as $puts) {
-                    fputs($fsocket, $puts);
-                    while(!$gets) { $gets = fgets($fsocket,32); }
-                    $json = json_decode(substr($puts,6), true);
+            ## php4.3.10일경우
+            ## zend 최신버전으로 업해주세요..
+            ## 또는 69번째 줄을 $this->Data as $tmp => $puts 로 변경해 주세요.
 
-                    $dest = $json["tel"];
-                    if (substr($gets,0,20) == "0225  00".spacing($dest,12)) {
-                        $this->Result[] = $dest.":".substr($gets,20,11);
+            foreach($this->Data as $puts) {
+                $dest = substr($puts,46,11);
 
-                    } else {
-                        $this->Result[$dest] = $dest.":Error(".substr($gets,6,2).")";
-                        if(substr($gets,6,2) >= "80") break;
-                    }
-                    $gets = "";
+                // $fsocket=fsockopen($this->SMS_Server, $this->SMS_Port);
+                // if (!$fsocket) return false;
 
-                    // 1천건씩 전송 후 5초 쉼
-                    if ($count++%1000 == 0) sleep(5);
+                $header = "";
+                $header .= "POST ".$this->SMS_Path." HTTP/1.1\r\n";
+                $header .= "Host: ".$this->SMS_Server."\r\n";
+                $header .= "Content-type: application/x-www-form-urlencoded\r\n";
+                $header .= "Content-length: " . strlen($puts) . "\r\n";
+                $header .= "Connection:close" . "\r\n\r\n";
+                fputs($fsocket, $header.'data='.$puts);
+
+                /*
+                while(!$gets) {
+                    $gets = fgets($fsocket,30);
+                } */
+
+                $response = '';
+                while (!feof($fsocket)) {
+                    $response .= fgets($fsocket, 128);
                 }
-                fclose($fsocket);
 
-            } else {
-                $fsocket = fsockopen($this->SMS_Server,$this->SMS_Port);
-                if (!$fsocket) return false;
-                set_time_limit(300);
+                list($header, $body) = explode("\r\n\r\n", $response, 2);
 
-                ## php4.3.10일경우
-                ## zend 최신버전으로 업해주세요..
-                ## 또는 69번째 줄을 $this->Data as $tmp => $puts 로 변경해 주세요.
+                $gets = trim($body);
 
-                foreach($this->Data as $puts) {
-                    $dest = substr($puts,26,11);
-                    fputs($fsocket, $puts);
-                    while(!$gets) {
-                        $gets = fgets($fsocket,30);
-                    }
-                    if (substr($gets,0,19) == "0223  00".$dest) {
-                        $this->Result[] = $dest.":".substr($gets,19,10);
-                        $this->Log[] = $puts;
-                    } else {
-                        $this->Result[$dest] = $dest.":Error(".substr($gets,6,2).")";
-                        $this->Log[] = $puts;
-                    }
-                    $gets = "";
-
-                    // 1천건씩 전송 후 5초 쉼
-                    if ($count++%1000 == 0) sleep(5);
+                if (substr($gets,0,19) == "0223  00".$dest) {
+                    $this->Result[] = $dest.":".substr($gets,19,10);
+                    $this->Log[] = $puts;
+                } else {
+                    $this->Result[$dest] = $dest.":Error(".substr($gets,6,2).")";
+                    $this->Log[] = $puts;
                 }
-                fclose($fsocket);
+                $gets = "";
+
+                // 1천건씩 전송 후 5초 쉼
+                if ($count++%1000 == 0) sleep(5);
             }
-            $this->Data = array();
+            fclose($fsocket);
+            $this->Data = "";
             return true;
         }
     }
